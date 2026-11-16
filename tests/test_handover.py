@@ -107,6 +107,30 @@ def test_switch_comfy_waits_for_strata_answer(rig):
     assert t.result == 200 and not rig.strata.loaded
 
 
+def test_busy_error_suggests_wait_only_without_one(rig, capsys):
+    """Without --wait, the error says to pass one."""
+    rig.strata.loaded = True
+    t = rig.strata.request_async(0.5)
+    time.sleep(0.05)
+    assert rig.cli("switch", "comfy", "--json") == 1
+    assert "use --wait SECONDS" in json.loads(capsys.readouterr().out)["error"]
+    t.join()
+
+
+def test_busy_error_when_strata_ignores_wait(rig, capsys):
+    """Issue #12: a Strata older than engine 0.1.43.1 answers /unload?wait=N busy at
+    once. Saying "use --wait" there is wrong; say the server didn't wait."""
+    rig.strata.loaded = True
+    rig.strata.ignores_wait = True
+    t = rig.strata.request_async(1.0)
+    time.sleep(0.05)
+    assert rig.cli("switch", "comfy", "--wait", "600", "--json") == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert "use --wait" not in error
+    assert "busy at once though asked to wait up to 59" in error and "ignore ?wait=" in error
+    t.join()
+
+
 def test_switch_strata_refused_while_comfy_has_jobs(rig):
     rig.comfy.queue_job({"1": {"class_type": "Slow", "inputs": {}}})
     assert rig.cli("switch", "strata") == 1

@@ -75,6 +75,7 @@ class FakeStrata(_Server):
         self.loading = False
         self.model = "qwen3.8-flash-next-iq3_xxs"
         self.answering = 0          # requests being answered
+        self.ignores_wait = False   # /unload answers busy at once (Strata before engine 0.1.43.1)
         self.load_s = 0.05
         self.on_load = lambda: True
         super().__init__()
@@ -124,7 +125,7 @@ class FakeStrata(_Server):
         if path == "/_vram":  # for a gpu-workload running in a subprocess (tests/run_cli.py)
             return h.send_json(200, {"vram": self.vram})
         if path == "/unload" and method == "POST":
-            wait = float(q.get("wait", 0))
+            wait = 0 if self.ignores_wait else float(q.get("wait", 0))
             deadline = time.monotonic() + wait
             while (self.answering or self.loading) and time.monotonic() < deadline:
                 time.sleep(0.01)
