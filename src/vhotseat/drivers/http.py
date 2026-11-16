@@ -23,6 +23,7 @@ starting with http:// goes to that address instead of `url` (a proxy in front
 of the server, say).
 """
 
+import time
 from dataclasses import dataclass, field
 
 from .. import util
@@ -123,9 +124,10 @@ class HttpWorkload(Workload):
                 raise Busy(f"{self.label} is still answering (use --wait SECONDS to let it finish)")
             if code != 200:
                 raise SwitchError(f"{self.label} {_request(pre)[1].split('?')[0]} failed: {code} {body}")
+        start = time.monotonic()
         code, body = self._call(spec, timeout=wait + spec.get("timeout", 30), wait=int(wait))
         if any(matches(r, code, body) for r in spec.get("busy_when", [])):
-            raise Busy(f"{self.label} is answering or loading (use --wait SECONDS to let it finish)")
+            raise Busy(self._busy_reason(spec, int(wait), time.monotonic() - start))
         ok = spec.get("ok_when") or [{"status": 200}]
         if not any(matches(r, code, body) for r in ok):
             raise SwitchError(f"{self.label} {_request(spec)[1].split('?')[0]} failed: {code} {body}")
@@ -134,6 +136,23 @@ class HttpWorkload(Workload):
         util.wait_until(lambda: self.vram_mib() <= limit, confirm.get("timeout", 30),
                         f"{self.label}'s engine to leave the GPU")
         return []
+
+    def _busy_reason(self, spec: dict, wait: int, took: float) -> str:
+        """Why a release answered busy. "Use --wait" only helps when no wait was
+        given; a server that answers busy well before the wait it was asked for
+        doesn't wait at all (Strata before engine 0.1.43.1 ignores /unload?wait=)."""
+        what = f"{self.label} is answering or loading"
+        if not wait:
+            return f"{what} (use --wait SECONDS to let it finish)"
+        path = _request(spec)[1].split("?")[0]
+        if "{wait}" not in _request(spec)[1]:
+            return (f"{what}, and its release request ({path}) has no {{wait}} to wait with; "
+                    "add ?wait={wait} to it if the server supports one")
+        if took < wait / 2:
+            when = "at once" if took < 1 else f"after {took:.0f} s"
+            return (f"{what}: it answered busy {when} though asked to wait up to {wait} s, "
+                    f"so its {path} seems to ignore ?wait= (Strata needs engine 0.1.43.1 or later)")
+        return f"{what}, still after waiting {wait} s"
 
     def can_load(self) -> bool:
         return "load" in self.spec
